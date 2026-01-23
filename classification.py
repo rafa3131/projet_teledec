@@ -90,8 +90,6 @@ def rasterization(in_vector, ref_image, out_image, field_name, dtype=None):
     vec_ds = None
     ref_ds = None
 
-    print("Rasterisation terminée :", out_image)
-
 
 def get_samples_from_roi(raster_name, roi_name, value_to_extract=None,
                          bands=None, output_fmt='full_matrix'):
