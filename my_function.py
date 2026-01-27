@@ -3,6 +3,7 @@ import numpy as np
 from osgeo import gdal, ogr
 import matplotlib.pyplot as plt
 import libsigma.read_and_write as rw
+import libsigma.classification as cla
 
 gdal.UseExceptions()
 
@@ -108,20 +109,75 @@ def compute_ari_stack(b03_file, b05_file):
 
 
 # =====================================================
+# ECRIRE TIF ROI TEMPORAIRE
+# =====================================================
+
+def write_roi_tif(roi_array, ref_raster, out_path):
+    """
+    Sauvegarde un raster ROI à partir d'un array numpy
+    en copiant la géométrie du raster de référence.
+    """
+
+    ds = gdal.Open(ref_raster)
+    gt = ds.GetGeoTransform()
+    proj = ds.GetProjection()
+
+    ny, nx = roi_array.shape
+
+    driver = gdal.GetDriverByName("GTiff")
+    out_ds = driver.Create(out_path, nx, ny, 1, gdal.GDT_UInt16)
+
+    out_ds.SetGeoTransform(gt)
+    out_ds.SetProjection(proj)
+
+    out_ds.GetRasterBand(1).WriteArray(roi_array)
+    out_ds.FlushCache()
+
+    out_ds = None
+
+
+# =====================================================
+# SUPPRESSION TIF ROI TEMPORAIRE
+# =====================================================
+
+def remove_file(path):
+    if os.path.exists(path):
+        os.remove(path)
+
+
+# =====================================================
 # STATS PAR STRATE
 # =====================================================
 
-def stats_by_strate(ari_stack, roi_array, strate_ids):
+def stats_by_strate(
+    ari_tif,
+    roi_tif,
+    strate_ids
+):
+    """
+    Calcule moyenne et écart-type ARI par strate
+    à partir du TIF ARI et du raster ROI
+    en utilisant la fonction du prof.
+    """
+
+    dict_X, Y, _ = cla.get_samples_from_roi(
+        raster_name=ari_tif,
+        roi_name=roi_tif,
+        output_fmt="by_label"
+    )
+
     mean_dict = {}
     std_dict = {}
 
     for s in strate_ids:
-        mask = roi_array == s
-        if not np.any(mask):
+
+        if s not in dict_X:
             continue
-        pixels = ari_stack[:, mask]  # shape = (dates, n_pixels)
-        mean_dict[s] = np.nanmean(pixels, axis=1)
-        std_dict[s] = np.nanstd(pixels, axis=1)
+
+        pixels = dict_X[s]   # shape = (n_pixels, n_dates)
+
+        mean_dict[s] = np.nanmean(pixels, axis=0)
+        std_dict[s] = np.nanstd(pixels, axis=0)
 
     return mean_dict, std_dict
 
@@ -180,14 +236,18 @@ def plot_pixel_histogram(counts_pixel, classe_nom, out_file):
 # TIF SERIE TEMPORELLE ARI
 # =====================================================
 
-def write_ari_timeseries_tif(ari_stack, ref_raster, out_tif, dates=None, nodata=-9999):
-    # dimensions
+def write_ari_timeseries_tif(
+        ari_stack,
+        ref_raster,
+        out_tif,
+        dates=None,
+        nodata=-9999):
+
     ref_ds = gdal.Open(ref_raster)
     gt = ref_ds.GetGeoTransform()
     proj = ref_ds.GetProjection()
 
-    # convertir en 3D pour write_image
-    arr_3d = np.transpose(ari_stack, (1, 2, 0)).copy()  # shape = (y, x, dates)
+    arr_3d = np.transpose(ari_stack, (1, 2, 0)).copy()
     arr_3d[np.isnan(arr_3d)] = nodata
 
     rw.write_image(
@@ -198,6 +258,19 @@ def write_ari_timeseries_tif(ari_stack, ref_raster, out_tif, dates=None, nodata=
         gdal_dtype=gdal.GDT_Float32,
         driver_name="GTiff"
     )
+
+    # -----------------------------
+    # NOM DES BANDES = DATES
+    # -----------------------------
+    if dates is not None:
+        ds = gdal.Open(out_tif, gdal.GA_Update)
+
+        for i, d in enumerate(dates):
+            band = ds.GetRasterBand(i + 1)
+            band.SetDescription(d)
+            band.SetNoDataValue(nodata)   # <<< AJOUT IMPORTANT
+
+        ds = None
 
 
 # =====================================================
